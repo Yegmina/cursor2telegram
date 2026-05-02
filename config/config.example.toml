@@ -1,0 +1,94 @@
+# cursor2telegram example configuration.
+# Copy to /etc/cursor2telegram/config.toml or ~/.config/cursor2telegram/config.toml
+# Secrets are also read from environment: TELEGRAM_BOT_TOKEN, CURSOR_API_KEY.
+
+[telegram]
+# Owner allowlist. Get your numeric Telegram user id from @userinfobot.
+allowed_user_ids = [123456789]
+# Optional chat allowlist (groups/supergroups).
+allowed_chat_ids = []
+# Optional. The user id who is "the owner" for default-DM and admin commands.
+# owner_user_id = 123456789
+parse_mode = "HTML"
+drop_pending_updates = true
+request_timeout_s = 30.0
+
+# bot_token is best supplied via TELEGRAM_BOT_TOKEN env var.
+# bot_token = "..."
+
+[cursor]
+# Path to the Cursor CLI binary. Empty -> autodetect (~/.local/bin/agent, /usr/local/bin/agent, ...).
+# agent_binary = "/home/cursoragent/.local/bin/agent"
+
+# Auth: prefer browser login (`agent login`) for the cursoragent user.
+# For headless setups set CURSOR_API_KEY in the environment.
+# api_key = ""
+# auth_token = ""
+
+# Optional override of the API endpoint (rare).
+# endpoint = "https://api2.cursor.sh"
+insecure = false
+
+default_mode = "agent"      # agent | plan | ask
+default_model = ""           # empty -> server default; e.g. "auto", "gpt-5.2", "sonnet-4.5-thinking"
+workspace = "/var/lib/cursor2telegram/workspaces/default"
+
+# Extra CLI args appended to `agent acp`. Leave empty unless you know what you need.
+extra_args = []
+
+# In headless flows Cursor needs --force/--yolo to actually write files.
+# Mirror that for ACP sessions: when true, default permission decisions become "allow-once".
+force_writes = true
+
+# Auto-approve MCP servers in this session (--approve-mcps).
+approve_mcps = false
+
+# Sandbox: "" | "enabled" | "disabled"
+sandbox = ""
+
+# --trust: skip workspace trust prompt.
+trust = true
+
+# Run inside a fresh git worktree under ~/.cursor/worktrees per session.
+use_worktree = false
+
+[policy]
+# Default response to ACP `session/request_permission` when no explicit user prompt is needed:
+#   prompt        -> always ask in Telegram (recommended)
+#   allow-once    -> always permit, ask again next time
+#   allow-always  -> permit and remember
+#   reject-once   -> deny once
+auto_approve_permissions = "prompt"
+
+# When the agent calls cursor/create_plan, accept it automatically.
+auto_accept_plans = false
+
+# When the agent calls cursor/ask_question, pick the first option automatically.
+auto_answer_questions = false
+
+# Always require explicit Telegram button confirmation for these tool categories,
+# even if Cursor itself doesn't request permission.
+require_confirmation_for = ["shell", "write", "delete", "network", "mcp"]
+
+# Refuse writes that target paths outside the active workspace.
+deny_outside_workspace_writes = true
+
+[ux]
+# Throttle outgoing edits while the agent is streaming.
+stream_throttle_ms = 600
+# Below Telegram's 4096-char hard limit; leaves room for HTML escapes/markdown.
+max_message_chars = 3500
+# If a code/log block grows beyond this many chars, send it as a document instead.
+code_as_document_threshold = 1500
+# Bot API 9.5 native AI-style streaming. Private chats use sendMessageDraft;
+# groups/channels fall back to editMessageText.
+use_message_drafts = true
+show_tool_call_args = true
+show_token_usage = true
+# Avoid noisy "done — end_turn" messages after every response.
+notify_on_completion = false
+
+[storage]
+state_dir = "/var/lib/cursor2telegram"
+log_dir = "/var/log/cursor2telegram"
+workspaces_root = "/var/lib/cursor2telegram/workspaces"

@@ -1,0 +1,29 @@
+[Unit]
+Description=cursor2telegram - control Cursor CLI from Telegram
+Documentation=https://github.com/Yegmina/cursor2telegram
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@USER@
+Group=@USER@
+WorkingDirectory=@WORKDIR@
+EnvironmentFile=-/etc/cursor2telegram/env
+Environment=PATH=/home/@USER@/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=HOME=/home/@USER@
+Environment=PYTHONUNBUFFERED=1
+ExecStart=@VENV@/bin/cursor2telegram --config /etc/cursor2telegram/config.toml
+Restart=on-failure
+RestartSec=3
+LimitNOFILE=65536
+
+# Hardening (we still need broad fs/exec since the agent does real work).
+NoNewPrivileges=no
+ProtectSystem=false
+ProtectHome=read-only
+ReadWritePaths=/var/lib/cursor2telegram /var/log/cursor2telegram /home/@USER@
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
