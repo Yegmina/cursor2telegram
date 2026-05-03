@@ -15,19 +15,37 @@ jobs:
     name: Redeploy staging server
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      STAGING_HOST: ${{ secrets.STAGING_HOST || vars.STAGING_HOST }}
+      STAGING_USER: ${{ secrets.STAGING_USER || vars.STAGING_USER }}
+      STAGING_SSH_KEY: ${{ secrets.STAGING_SSH_KEY }}
+      STAGING_SSH_PORT: ${{ secrets.STAGING_SSH_PORT || vars.STAGING_SSH_PORT || '22' }}
+      C2T_REPO_URL: ${{ secrets.STAGING_REPO_URL || vars.STAGING_REPO_URL || 'git@github.com:Yegmina/cursor2telegram.git' }}
+      C2T_DEPLOY_DIR: ${{ secrets.STAGING_DEPLOY_DIR || vars.STAGING_DEPLOY_DIR || '/opt/cursor2telegram/staging' }}
 
     steps:
+      - name: Validate deployment settings
+        run: |
+          missing=0
+          for name in STAGING_HOST STAGING_USER STAGING_SSH_KEY; do
+            if [ -z "${!name}" ]; then
+              echo "::error::${name} is not configured. Add it as a GitHub repository secret or variable."
+              missing=1
+            fi
+          done
+          exit "${missing}"
+
       - name: Deploy over SSH
         uses: appleboy/ssh-action@v1.2.2
         with:
-          host: ${{ secrets.STAGING_HOST }}
-          username: ${{ secrets.STAGING_USER }}
-          key: ${{ secrets.STAGING_SSH_KEY }}
-          port: ${{ secrets.STAGING_SSH_PORT || 22 }}
-          script_stop: true
+          host: ${{ env.STAGING_HOST }}
+          username: ${{ env.STAGING_USER }}
+          key: ${{ env.STAGING_SSH_KEY }}
+          port: ${{ env.STAGING_SSH_PORT }}
           script: |
-            export C2T_REPO_URL="${{ secrets.STAGING_REPO_URL || 'git@github.com:Yegmina/cursor2telegram.git' }}"
-            export C2T_DEPLOY_DIR="${{ secrets.STAGING_DEPLOY_DIR || '/opt/cursor2telegram/staging' }}"
+            set -euo pipefail
+            export C2T_REPO_URL="${{ env.C2T_REPO_URL }}"
+            export C2T_DEPLOY_DIR="${{ env.C2T_DEPLOY_DIR }}"
             export C2T_BRANCH="staging"
 
             if command -v sudo >/dev/null; then
