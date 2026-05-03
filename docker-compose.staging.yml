@@ -27,9 +27,9 @@ services:
       - |
         set -euo pipefail
         python -m venv /var/lib/cursor2telegram/staging-venv
-        python -m pip install --upgrade pip wheel
-        python -m pip install -e /app
-        exec cursor2telegram
+        /var/lib/cursor2telegram/staging-venv/bin/python -m pip install --upgrade pip wheel
+        /var/lib/cursor2telegram/staging-venv/bin/python -m pip install -e /app
+        exec /var/lib/cursor2telegram/staging-venv/bin/cursor2telegram
     healthcheck:
       test: ["CMD-SHELL", "/var/lib/cursor2telegram/staging-venv/bin/cursor2telegram --check"]
       interval: 60s
