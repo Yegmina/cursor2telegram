@@ -207,13 +207,30 @@ class BotApp:
             cmd += ["--approve-mcps"]
         if self.config.cursor.trust:
             cmd += ["--trust"]
-        if sess.model and sess.model not in {"auto", "default[]"}:
-            cmd += ["--model", sess.model]
+        model_arg = self._agent_model_arg(sess.model)
+        if model_arg:
+            cmd += ["--model", model_arg]
         if sess.mode and sess.mode != "agent":
             cmd += ["--mode", sess.mode]
         cmd.extend(self.config.cursor.extra_args)
         cmd.append("acp")
         return cmd
+
+    @staticmethod
+    def _agent_model_arg(model_id: str) -> str:
+        """Return a Cursor CLI --model value, or empty for ACP-only ids.
+
+        ACP exposes rich ids like ``claude-opus-4-7[thinking=true,...]`` in
+        session metadata, but the CLI currently accepts short model slugs for
+        ``agent --model``. Passing the rich id makes the ACP process exit.
+        """
+
+        model_id = (model_id or "").strip()
+        if not model_id or model_id in {"auto", "default", "default[]"}:
+            return ""
+        if "[" in model_id:
+            return ""
+        return model_id
 
     async def _preflight_login(self) -> tuple[bool, str]:
         """Return (ok, message). Cheap check before spawning ACP."""
