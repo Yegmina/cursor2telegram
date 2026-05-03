@@ -42,6 +42,7 @@ jobs:
           username: ${{ env.STAGING_USER }}
           key: ${{ env.STAGING_SSH_KEY }}
           port: ${{ env.STAGING_SSH_PORT }}
+          command_timeout: 30m
           script: |
             set -euo pipefail
             export C2T_REPO_URL="${{ env.C2T_REPO_URL }}"

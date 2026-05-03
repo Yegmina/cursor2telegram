@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM python:3.12-slim-bookworm
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -6,8 +6,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PATH="/home/cursoragent/.local/bin:${PATH}" \
     CURSOR2TELEGRAM_CONFIG=/etc/cursor2telegram/config.toml
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
+RUN apt-get -o Acquire::ForceIPv4=true -o Acquire::Retries=3 update \
+    && apt-get -o Acquire::ForceIPv4=true -o Acquire::Retries=3 install -y --no-install-recommends \
         bash \
         ca-certificates \
         curl \
