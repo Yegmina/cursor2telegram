@@ -1,0 +1,53 @@
+name: Deploy Staging
+
+on:
+  push:
+    branches:
+      - staging
+  workflow_dispatch:
+
+concurrency:
+  group: staging
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Redeploy staging server
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1.2.2
+        with:
+          host: ${{ secrets.STAGING_HOST }}
+          username: ${{ secrets.STAGING_USER }}
+          key: ${{ secrets.STAGING_SSH_KEY }}
+          port: ${{ secrets.STAGING_SSH_PORT || 22 }}
+          script_stop: true
+          script: |
+            export C2T_REPO_URL="${{ secrets.STAGING_REPO_URL || 'git@github.com:Yegmina/cursor2telegram.git' }}"
+            export C2T_DEPLOY_DIR="${{ secrets.STAGING_DEPLOY_DIR || '/opt/cursor2telegram/staging' }}"
+            export C2T_BRANCH="staging"
+
+            if command -v sudo >/dev/null; then
+              sudo --preserve-env=C2T_REPO_URL,C2T_DEPLOY_DIR,C2T_BRANCH bash -lc '
+                if [ -x "$C2T_DEPLOY_DIR/scripts/deploy-staging.sh" ]; then
+                  "$C2T_DEPLOY_DIR/scripts/deploy-staging.sh"
+                else
+                  tmp_dir="$(mktemp -d)"
+                  git clone --depth 1 --branch "$C2T_BRANCH" "$C2T_REPO_URL" "$tmp_dir"
+                  "$tmp_dir/scripts/deploy-staging.sh"
+                fi
+              '
+            else
+              bash -lc '
+                if [ -x "$C2T_DEPLOY_DIR/scripts/deploy-staging.sh" ]; then
+                  "$C2T_DEPLOY_DIR/scripts/deploy-staging.sh"
+                else
+                  tmp_dir="$(mktemp -d)"
+                  git clone --depth 1 --branch "$C2T_BRANCH" "$C2T_REPO_URL" "$tmp_dir"
+                  "$tmp_dir/scripts/deploy-staging.sh"
+                fi
+              '
+            fi
