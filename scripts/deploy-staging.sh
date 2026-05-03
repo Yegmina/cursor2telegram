@@ -38,6 +38,6 @@ if [[ ! -f /etc/cursor2telegram/env || ! -f /etc/cursor2telegram/config.toml ]];
   exit 3
 fi
 
-docker compose -f "${DEPLOY_DIR}/${COMPOSE_FILE}" build
+docker compose -f "${DEPLOY_DIR}/${COMPOSE_FILE}" pull --ignore-buildable || true
 docker compose -f "${DEPLOY_DIR}/${COMPOSE_FILE}" up -d --remove-orphans
 docker compose -f "${DEPLOY_DIR}/${COMPOSE_FILE}" ps
