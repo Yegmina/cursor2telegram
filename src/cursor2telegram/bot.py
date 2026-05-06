@@ -209,13 +209,25 @@ class BotApp:
             cmd += ["--approve-mcps"]
         if self.config.cursor.trust:
             cmd += ["--trust"]
-        if sess.model and sess.model not in {"auto", "default[]"}:
-            cmd += ["--model", sess.model]
+        model_arg = self._agent_model_arg(sess.model)
+        if model_arg:
+            cmd += ["--model", model_arg]
         if sess.mode and sess.mode != "agent":
             cmd += ["--mode", sess.mode]
         cmd.extend(self.config.cursor.extra_args)
         cmd.append("acp")
         return cmd
+
+    @staticmethod
+    def _agent_model_arg(model_id: str) -> str:
+        """CLI --model only accepts short slugs; rich ACP ids with brackets break agent acp."""
+
+        mid = (model_id or "").strip()
+        if not mid or mid in {"auto", "default", "default[]"}:
+            return ""
+        if "[" in mid:
+            return ""
+        return mid
 
     @staticmethod
     def _workspace_from_args(args: list[str] | tuple[str, ...] | None) -> Path | None:
@@ -262,6 +274,8 @@ class BotApp:
                     "/var/lib/cursor2telegram/workspaces/default (see [cursor] workspace).\n"
                     "• Set CURSOR_API_KEY in /etc/cursor2telegram/env for stable auth.\n"
                     "• In config.toml set approve_mcps = false if MCP startup fails.\n"
+                    "• The bot waits a few seconds after connect before session/new; if errors persist, "
+                    "raise acp_ready_delay_s in [cursor] (e.g. 3) or check agent version.\n"
                     "• Server: agent status | journalctl -u cursor2telegram -n 80"
                 )
                 + "</pre>"
@@ -321,8 +335,12 @@ class BotApp:
                 )
             except (AcpError, TimeoutError):
                 pass
+            ready = max(0.0, self.config.cursor.acp_ready_delay_s)
+            if ready:
+                log.info("acp.post_initialize_delay", seconds=ready)
+                await asyncio.sleep(ready)
             res: dict[str, Any] | None = None
-            for attempt in range(2):
+            for attempt in range(3):
                 try:
                     res = await asyncio.wait_for(
                         acp_session_new(
@@ -332,9 +350,15 @@ class BotApp:
                     )
                     break
                 except AcpError as e:
-                    if e.code == -32603 and attempt == 0:
-                        log.warning("session.new.retry_after_internal", error=str(e))
-                        await asyncio.sleep(1.5)
+                    if e.code == -32603 and attempt < 2:
+                        pause = 2.0 if attempt == 0 else 3.0
+                        log.warning(
+                            "session.new.retry_after_internal",
+                            attempt=attempt,
+                            pause_s=pause,
+                            error=str(e),
+                        )
+                        await asyncio.sleep(pause)
                         continue
                     raise
             if res is None:  # pragma: no cover - loop always sets or raises
