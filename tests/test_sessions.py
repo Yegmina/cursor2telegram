@@ -32,15 +32,29 @@ def test_workspace_keeps_normal_path(tmp_path):
     assert out.is_dir()
 
 
-def test_remap_unsafe_direct(tmp_path):
+def test_is_unsafe_flags_slash_root_and_detects_logical_root_path():
     cfg = Config(
         telegram=TelegramConfig(allowed_user_ids=(1,)),
         cursor=CursorConfig(),
+        storage=StorageConfig(workspaces_root=Path("/var/lib/ws")),
+    )
+    sm = SessionManager(cfg)
+    assert sm._is_unsafe_cursor_workspace(Path("/"))
+    assert sm._is_unsafe_cursor_workspace(Path("/root"))
+    assert sm._is_unsafe_cursor_workspace(Path("/root/"))
+    assert not sm._is_unsafe_cursor_workspace(Path("/root/myproject"))
+
+
+def test_subpath_under_root_not_treated_as_filesystem_root(tmp_path):
+    proj = tmp_path / "under" / "proj"
+    cfg = Config(
+        telegram=TelegramConfig(allowed_user_ids=(1,)),
+        cursor=CursorConfig(workspace=str(proj)),
         storage=StorageConfig(workspaces_root=tmp_path / "ws"),
     )
     sm = SessionManager(cfg)
-    alt = sm.remap_unsafe_workspace(9, Path("/root"))
-    assert alt == tmp_path / "ws" / "chat-9"
+    out = sm._workspace_for(1)
+    assert out == proj
 
 
 def test_get_or_create_heals_session_stuck_on_root(tmp_path):

@@ -49,12 +49,25 @@ class SessionManager:
         except OSError:
             return path.expanduser()
 
+    def _is_unsafe_cursor_workspace(self, workspace: Path) -> bool:
+        """Detect / and superuser home as project roots — resolve() can differ if /root is a symlink."""
+
+        exp = workspace.expanduser()
+        logical = str(exp).rstrip("/").rstrip() or "/"
+        if logical in {"/", "/root"}:
+            return True
+        try:
+            p = exp.resolve(strict=False)
+        except OSError:
+            p = exp
+        return p in {Path("/"), Path("/root")}
+
     def remap_unsafe_workspace(self, chat_id: int, workspace: Path) -> Path:
         """Project roots / and /root often make Cursor session/new fail (-32603); use a normal folder."""
 
-        p = self._resolve_workspace_path(workspace)
-        if p in {Path("/"), Path("/root")}:
+        if self._is_unsafe_cursor_workspace(workspace):
             alt = self.config.storage.workspaces_root / f"chat-{chat_id}"
+            p = self._resolve_workspace_path(workspace)
             log.warning(
                 "workspace.remapped_unsafe",
                 chat_id=chat_id,
@@ -90,8 +103,7 @@ class SessionManager:
             self.sessions[chat_id] = sess
             log.info("session.create", chat_id=chat_id, workspace=str(canonical))
         else:
-            rp = self._resolve_workspace_path(sess.workspace)
-            if rp in {Path("/"), Path("/root")} and sess.workspace != canonical:
+            if self._is_unsafe_cursor_workspace(sess.workspace):
                 log.info(
                     "session.workspace_heal",
                     chat_id=chat_id,
