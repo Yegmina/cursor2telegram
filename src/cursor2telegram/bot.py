@@ -264,13 +264,25 @@ class BotApp:
     @staticmethod
     def _format_cursor_session_error(exc: BaseException, *, stderr_tail: str = "") -> str:
         """HTML-safe detail for Telegram when ACP/session start fails."""
-        max_total = 3400
+        max_total = 4200
         chunks: list[str] = [html_escape(str(exc) or type(exc).__name__)]
         if isinstance(exc, AcpError) and exc.data is not None:
             detail = exc.data if isinstance(exc.data, str) else json.dumps(exc.data, ensure_ascii=False)
             detail = detail.strip()
             if detail:
                 chunks.append(html_escape(f"Details: {detail[:1800]}"))
+        if isinstance(exc, AcpError) and exc.code == -32603:
+            chunks.append(
+                "<i>Typical fixes for internal error (-32603)</i>\n<pre>"
+                + html_escape(
+                    "• Do not use / or /root as workspace — use a project directory, e.g. "
+                    "/var/lib/cursor2telegram/workspaces/default (see [cursor] workspace).\n"
+                    "• Set CURSOR_API_KEY in /etc/cursor2telegram/env for stable auth.\n"
+                    "• In config.toml set approve_mcps = false if MCP startup fails.\n"
+                    "• Server: agent status | journalctl -u cursor2telegram -n 80"
+                )
+                + "</pre>"
+            )
         if stderr_tail.strip():
             chunks.append(
                 "<i>Recent agent stderr</i>\n<pre>"
@@ -287,6 +299,11 @@ class BotApp:
         if not ok:
             raise RuntimeError(msg)
 
+        ws = self.sessions.remap_unsafe_workspace(sess.chat_id, sess.workspace)
+        ws.mkdir(parents=True, exist_ok=True)
+        if ws != sess.workspace:
+            sess.workspace = ws
+
         cmd = self._build_acp_command(sess)
         mcp_for_acp: list[dict[str, Any]] | None = None
         if self.config.cursor.approve_mcps:
@@ -294,7 +311,7 @@ class BotApp:
         env = dict(os.environ)
         if self.config.cursor.api_key:
             env["CURSOR_API_KEY"] = self.config.cursor.api_key
-        client = AcpClient(cmd, env=env, cwd=str(sess.workspace))
+        client = AcpClient(cmd, env=env, cwd=str(ws))
         sess.acp = client
 
         agg = StreamAggregator(throttle_ms=self.config.ux.stream_throttle_ms)
@@ -326,7 +343,7 @@ class BotApp:
                 try:
                     res = await asyncio.wait_for(
                         acp_session_new(
-                            client, cwd=str(sess.workspace), mcp_servers=mcp_for_acp
+                            client, cwd=str(ws), mcp_servers=mcp_for_acp
                         ),
                         timeout=20,
                     )
@@ -571,7 +588,7 @@ class BotApp:
                         parse_mode=PARSE_MODE,
                     )
                     return
-                sess.workspace = requested_workspace
+                sess.workspace = self.sessions.remap_unsafe_workspace(cid, requested_workspace)
             try:
                 await self._start_session(sess)
             except Exception as exc:
@@ -693,7 +710,7 @@ class BotApp:
         if sess.acp:
             await self.sessions.close(sess.chat_id)
             sess = self.sessions.get_or_create(update.effective_chat.id)
-        sess.workspace = new_path
+        sess.workspace = self.sessions.remap_unsafe_workspace(sess.chat_id, new_path)
         await update.effective_message.reply_text(
             f"Workspace set to <code>{html_escape(str(new_path))}</code> (next prompt will start a new session).",
             parse_mode=PARSE_MODE,

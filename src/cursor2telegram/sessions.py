@@ -42,6 +42,29 @@ class SessionManager:
         self.sessions: dict[int, ChatSession] = {}
         self._locks: dict[int, asyncio.Lock] = {}
 
+    @staticmethod
+    def _resolve_workspace_path(path: Path) -> Path:
+        try:
+            return path.expanduser().resolve(strict=False)
+        except OSError:
+            return path.expanduser()
+
+    def remap_unsafe_workspace(self, chat_id: int, workspace: Path) -> Path:
+        """Project roots / and /root often make Cursor session/new fail (-32603); use a normal folder."""
+
+        p = self._resolve_workspace_path(workspace)
+        if p in {Path("/"), Path("/root")}:
+            alt = self.config.storage.workspaces_root / f"chat-{chat_id}"
+            log.warning(
+                "workspace.remapped_unsafe",
+                chat_id=chat_id,
+                configured=str(workspace),
+                resolved=str(p),
+                using=str(alt),
+            )
+            return alt
+        return workspace
+
     def lock_for(self, chat_id: int) -> asyncio.Lock:
         lock = self._locks.get(chat_id)
         if lock is None:
@@ -54,18 +77,28 @@ class SessionManager:
 
     def get_or_create(self, chat_id: int) -> ChatSession:
         sess = self.sessions.get(chat_id)
+        canonical = self._workspace_for(chat_id)
         if sess is None:
-            workspace = self._workspace_for(chat_id)
             sess = ChatSession(
                 chat_id=chat_id,
-                workspace=workspace,
+                workspace=canonical,
                 mode=self.config.cursor.default_mode,
                 model=self.config.cursor.default_model,
                 sandbox=self.config.cursor.sandbox,
                 yolo=self.config.cursor.force_writes,
             )
             self.sessions[chat_id] = sess
-            log.info("session.create", chat_id=chat_id, workspace=str(workspace))
+            log.info("session.create", chat_id=chat_id, workspace=str(canonical))
+        else:
+            rp = self._resolve_workspace_path(sess.workspace)
+            if rp in {Path("/"), Path("/root")} and sess.workspace != canonical:
+                log.info(
+                    "session.workspace_heal",
+                    chat_id=chat_id,
+                    old=str(sess.workspace),
+                    new=str(canonical),
+                )
+                sess.workspace = canonical
         return sess
 
     async def close(self, chat_id: int) -> None:
@@ -86,5 +119,6 @@ class SessionManager:
             base = Path(self.config.cursor.workspace).expanduser()
         else:
             base = self.config.storage.workspaces_root / f"chat-{chat_id}"
+        base = self.remap_unsafe_workspace(chat_id, base)
         base.mkdir(parents=True, exist_ok=True)
         return base

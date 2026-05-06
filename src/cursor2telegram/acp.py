@@ -239,6 +239,12 @@ class AcpClient:
                 if line:
                     self._stderr_recent.append(line)
                     log.debug("acp.stderr", line=line)
+                    low = line.lower()
+                    if any(
+                        x in low
+                        for x in ("error", "fatal", "panic", "internal", "failed", "exception")
+                    ):
+                        log.warning("acp.stderr.heavy", line=line[:800])
         except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001
