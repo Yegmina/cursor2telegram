@@ -31,6 +31,7 @@ insecure = false
 
 default_mode = "agent"      # agent | plan | ask
 default_model = ""           # empty -> server default; e.g. "auto", "gpt-5.2", "sonnet-4.5-thinking"
+# Project directory for the agent (session/new cwd). NEVER point at / or /root — that often breaks session/new (-32603).
 workspace = "/var/lib/cursor2telegram/workspaces/default"
 
 # Extra CLI args appended to `agent acp`. Leave empty unless you know what you need.
