@@ -20,6 +20,7 @@ import contextlib
 import dataclasses
 import json
 import os
+from collections import deque
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -77,6 +78,7 @@ class AcpClient:
         self._write_lock = asyncio.Lock()
         self._closed = asyncio.Event()
         self._exit_code: int | None = None
+        self._stderr_recent: deque[str] = deque(maxlen=48)
 
     @property
     def running(self) -> bool:
@@ -85,6 +87,17 @@ class AcpClient:
     @property
     def exit_code(self) -> int | None:
         return self._exit_code
+
+    def recent_stderr_tail(self, max_chars: int = 900) -> str:
+        """Last lines from the agent subprocess (for user-facing diagnostics)."""
+
+        lines = list(self._stderr_recent)
+        if not lines:
+            return ""
+        text = "\n".join(lines).strip()
+        if len(text) <= max_chars:
+            return text
+        return text[-max_chars:].lstrip()
 
     async def start(self) -> None:
         if self._process:
@@ -224,6 +237,7 @@ class AcpClient:
                     break
                 line = raw.decode("utf-8", errors="replace").rstrip()
                 if line:
+                    self._stderr_recent.append(line)
                     log.debug("acp.stderr", line=line)
         except asyncio.CancelledError:
             raise

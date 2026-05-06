@@ -46,7 +46,6 @@ from .acp import (
     PERMISSION_REJECT_ONCE,
     initialize as acp_initialize,
     session_cancel as acp_session_cancel,
-    session_load as acp_session_load,
     session_new as acp_session_new,
     session_prompt as acp_session_prompt,
 )
@@ -70,6 +69,7 @@ from .telegram_ui import (
     render_tool_call,
     split_for_telegram,
 )
+from .voice import OpenAIVoiceService, SpeechFile, VoiceError, VoiceUnavailable
 
 log = get_logger(__name__)
 
@@ -127,6 +127,7 @@ class BotApp:
         ("whoami", "Show cursor account info"),
         ("about", "Versions and environment"),
         ("settings", "Inline settings menu"),
+        ("voice", "Voice input and spoken summary settings"),
         ("ping", "Liveness probe"),
     ]
 
@@ -138,6 +139,7 @@ class BotApp:
         self._app: Application | None = None
         self._aggregators: dict[int, StreamAggregator] = {}
         self._stream_msg_ids: dict[int, dict[str, int]] = {}
+        self.voice = OpenAIVoiceService(config.voice)
 
     # ---------------------------------------------------------------- runtime
 
@@ -232,6 +234,15 @@ class BotApp:
             return ""
         return model_id
 
+    @staticmethod
+    def _workspace_from_args(args: list[str] | tuple[str, ...] | None) -> Path | None:
+        if not args:
+            return None
+        raw = " ".join(str(a) for a in args).strip()
+        if not raw:
+            return None
+        return Path(raw).expanduser().resolve(strict=False)
+
     async def _preflight_login(self) -> tuple[bool, str]:
         """Return (ok, message). Cheap check before spawning ACP."""
         if self.config.cursor.api_key or self.config.cursor.auth_token:
@@ -250,13 +261,36 @@ class BotApp:
             )
         return True, ""
 
+    @staticmethod
+    def _format_cursor_session_error(exc: BaseException, *, stderr_tail: str = "") -> str:
+        """HTML-safe detail for Telegram when ACP/session start fails."""
+        max_total = 3400
+        chunks: list[str] = [html_escape(str(exc) or type(exc).__name__)]
+        if isinstance(exc, AcpError) and exc.data is not None:
+            detail = exc.data if isinstance(exc.data, str) else json.dumps(exc.data, ensure_ascii=False)
+            detail = detail.strip()
+            if detail:
+                chunks.append(html_escape(f"Details: {detail[:1800]}"))
+        if stderr_tail.strip():
+            chunks.append(
+                "<i>Recent agent stderr</i>\n<pre>"
+                + html_escape(stderr_tail.strip()[-2200:])
+                + "</pre>"
+            )
+        out = "\n\n".join(chunks)
+        if len(out) > max_total:
+            return out[: max_total - 12] + html_escape("\n\n…truncated")
+        return out
+
     async def _start_session(self, sess: ChatSession) -> None:
         ok, msg = await self._preflight_login()
         if not ok:
             raise RuntimeError(msg)
 
         cmd = self._build_acp_command(sess)
-        mcp_servers = self._load_acp_mcp_servers() if self.config.cursor.approve_mcps else []
+        mcp_for_acp: list[dict[str, Any]] | None = None
+        if self.config.cursor.approve_mcps:
+            mcp_for_acp = self._load_acp_mcp_servers()
         env = dict(os.environ)
         if self.config.cursor.api_key:
             env["CURSOR_API_KEY"] = self.config.cursor.api_key
@@ -274,8 +308,8 @@ class BotApp:
         client.on("cursor/task", self._mk_task_handler(sess))
         client.on("cursor/generate_image", self._mk_image_handler(sess))
 
-        await client.start()
         try:
+            await client.start()
             await asyncio.wait_for(
                 acp_initialize(client, client_name="cursor2telegram", client_version=__version__),
                 timeout=15,
@@ -285,11 +319,26 @@ class BotApp:
                     client.request("authenticate", {"methodId": "cursor_login"}),
                     timeout=10,
                 )
-            except (AcpError, asyncio.TimeoutError):
+            except (AcpError, TimeoutError):
                 pass
-            res = await asyncio.wait_for(
-                acp_session_new(client, cwd=str(sess.workspace), mcp_servers=mcp_servers), timeout=20
-            )
+            res: dict[str, Any] | None = None
+            for attempt in range(2):
+                try:
+                    res = await asyncio.wait_for(
+                        acp_session_new(
+                            client, cwd=str(sess.workspace), mcp_servers=mcp_for_acp
+                        ),
+                        timeout=20,
+                    )
+                    break
+                except AcpError as e:
+                    if e.code == -32603 and attempt == 0:
+                        log.warning("session.new.retry_after_internal", error=str(e))
+                        await asyncio.sleep(1.5)
+                        continue
+                    raise
+            if res is None:  # pragma: no cover - loop always sets or raises
+                raise RuntimeError("session/new returned no result")
             sess.session_id = str(res.get("sessionId"))
             models = res.get("models") or {}
             modes = res.get("modes") or {}
@@ -298,7 +347,18 @@ class BotApp:
             sess.extra_state["available_modes"] = modes.get("availableModes") or []
             sess.extra_state["current_mode_id"] = modes.get("currentModeId") or sess.mode
             log.info("session.started", chat_id=sess.chat_id, sid=sess.session_id)
-        except Exception:
+        except Exception as exc:
+            tail = client.recent_stderr_tail(1600)
+            if tail:
+                sess.extra_state["last_acp_stderr"] = tail
+            if isinstance(exc, AcpError):
+                log.warning(
+                    "session.start.failed_acp",
+                    code=exc.code,
+                    message=exc.message,
+                    data=exc.data,
+                    stderr_tail=tail[:500] if tail else None,
+                )
             await client.stop()
             sess.acp = None
             raise
@@ -362,8 +422,8 @@ class BotApp:
         # Commands
         app.add_handler(CommandHandler("start", self.cmd_start))
         app.add_handler(CommandHandler(["help", "h"], self.cmd_help))
-        app.add_handler(CommandHandler("status", self.cmd_status))
-        app.add_handler(CommandHandler("new", self.cmd_new))
+        app.add_handler(CommandHandler(["status", "st"], self.cmd_status))
+        app.add_handler(CommandHandler(["new", "n"], self.cmd_new))
         app.add_handler(CommandHandler("cancel", self.cmd_cancel))
         app.add_handler(CommandHandler("mode", self.cmd_mode))
         app.add_handler(CommandHandler("model", self.cmd_model))
@@ -382,13 +442,15 @@ class BotApp:
         app.add_handler(CommandHandler("whoami", self.cmd_whoami))
         app.add_handler(CommandHandler("about", self.cmd_about))
         app.add_handler(CommandHandler("settings", self.cmd_settings))
+        app.add_handler(CommandHandler("voice", self.cmd_voice))
         app.add_handler(CommandHandler("ping", self.cmd_ping))
-        app.add_handler(CommandHandler("sessions", self.cmd_status))
+        app.add_handler(CommandHandler(["sessions", "ss"], self.cmd_status))
         app.add_handler(CommandHandler("put", self.cmd_put))
         # Callback buttons
         app.add_handler(CallbackQueryHandler(self.on_callback))
         # Text + files
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.on_text))
+        app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, self.on_voice))
         app.add_handler(MessageHandler(filters.Document.ALL | filters.PHOTO, self.on_file))
         # Catch-all unknown commands.
         app.add_handler(MessageHandler(filters.COMMAND, self.on_unknown_command))
@@ -491,27 +553,42 @@ class BotApp:
             text, parse_mode=PARSE_MODE, reply_markup=kb_main_menu()
         )
 
-    async def cmd_new(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    async def cmd_new(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._guard(update):
             return
         cid = update.effective_chat.id
+        requested_workspace = self._workspace_from_args(getattr(ctx, "args", None))
         async with self.sessions.lock_for(cid):
             await self.sessions.close(cid)
             sess = self.sessions.get_or_create(cid)
+            if requested_workspace is not None:
+                try:
+                    requested_workspace.mkdir(parents=True, exist_ok=True)
+                except OSError as exc:
+                    await update.effective_message.reply_text(
+                        f"Could not create workspace: <code>{html_escape(str(requested_workspace))}</code>\n"
+                        f"{html_escape(str(exc))}",
+                        parse_mode=PARSE_MODE,
+                    )
+                    return
+                sess.workspace = requested_workspace
             try:
                 await self._start_session(sess)
-            except Exception as exc:  # noqa: BLE001 - surface startup failures in Telegram
+            except Exception as exc:
+                stderr_tail = sess.extra_state.pop("last_acp_stderr", "")
                 if sess.acp:
                     with contextlib.suppress(Exception):
                         await sess.acp.stop()
                     sess.acp = None
+                detail = self._format_cursor_session_error(exc, stderr_tail=stderr_tail)
                 await update.effective_message.reply_text(
-                    f"Could not start Cursor session: {html_escape(str(exc) or type(exc).__name__)}",
+                    f"Could not start Cursor session:\n{detail}",
                     parse_mode=PARSE_MODE,
                 )
                 return
         await update.effective_message.reply_text(
-            f"Started new session <code>{html_escape(sess.session_id or '?')}</code>",
+            f"Started new session <code>{html_escape(sess.session_id or '?')}</code>\n"
+            f"Workspace: <code>{html_escape(str(sess.workspace))}</code>",
             parse_mode=PARSE_MODE,
         )
 
@@ -556,12 +633,14 @@ class BotApp:
             if not sess.extra_state.get("available_models"):
                 try:
                     sess = await self._ensure_session(chat_id)
-                except Exception as exc:  # noqa: BLE001
+                except Exception as exc:
+                    stderr_tail = sess.extra_state.pop("last_acp_stderr", "")
+                    detail = self._format_cursor_session_error(exc, stderr_tail=stderr_tail)
                     await update.effective_message.reply_text(
                         "Current model: "
                         f"<b>{html_escape(sess.model or 'auto')}</b>\n"
-                        "Could not refresh model list: "
-                        f"{html_escape(str(exc) or type(exc).__name__)}",
+                        "Could not refresh model list:\n"
+                        f"{detail}",
                         parse_mode=PARSE_MODE,
                     )
                     return
@@ -736,6 +815,12 @@ class BotApp:
         rc, out, err = await self._run_shell(cmdline, cwd=str(sess.workspace), timeout=120)
         body = (out or "") + (("\nSTDERR:\n" + err) if err else "") + f"\n[exit {rc}]"
         await self._send_text_or_doc(update, body)
+        await self._send_voice_summary(
+            update.effective_chat,
+            sess,
+            body,
+            context=f"/run {cmdline[:160]}",
+        )
 
     async def cmd_login(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._guard(update):
@@ -773,9 +858,11 @@ class BotApp:
         if not await self._guard(update):
             return
         sess = self.sessions.get_or_create(update.effective_chat.id)
+        voice_on = self._voice_summary_enabled(sess)
         await update.effective_message.reply_text(
             f"<b>Settings</b>\nMode: {sess.mode}\nModel: {html_escape(sess.model or 'auto')}\n"
-            f"Sandbox: {sess.sandbox or '-'}\nYOLO: {'on' if sess.yolo else 'off'}",
+            f"Sandbox: {sess.sandbox or '-'}\nYOLO: {'on' if sess.yolo else 'off'}\n"
+            f"Voice summaries: {'on' if voice_on else 'off'}",
             parse_mode=PARSE_MODE,
             reply_markup=InlineKeyboardMarkup(
                 [
@@ -786,6 +873,9 @@ class BotApp:
                     ],
                     [
                         InlineKeyboardButton("YOLO toggle", callback_data="yolo:toggle"),
+                        InlineKeyboardButton("Voice toggle", callback_data="voice:toggle"),
+                    ],
+                    [
                         InlineKeyboardButton("Sandbox on", callback_data="sandbox:on"),
                         InlineKeyboardButton("Sandbox off", callback_data="sandbox:off"),
                     ],
@@ -797,6 +887,37 @@ class BotApp:
             ),
         )
 
+    async def cmd_voice(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        if not await self._guard(update):
+            return
+        sess = self.sessions.get_or_create(update.effective_chat.id)
+        args = [a.lower() for a in (ctx.args or [])]
+        if args and args[0] in {"on", "off"}:
+            sess.extra_state["voice_summary_enabled"] = args[0] == "on"
+            await update.effective_message.reply_text(
+                f"Voice summaries: <b>{args[0]}</b>", parse_mode=PARSE_MODE
+            )
+            return
+        if args and args[0] == "test":
+            await self._send_voice_summary(
+                update.effective_chat,
+                sess,
+                "Voice summaries are configured and ready.",
+                context="voice test",
+                force=True,
+            )
+            return
+        status = (
+            "<b>Voice</b>\n"
+            f"Input transcription: {'ready' if self.voice.available else 'needs OPENAI_API_KEY'}\n"
+            f"Spoken summaries: {'on' if self._voice_summary_enabled(sess) else 'off'}\n"
+            f"Provider: <code>{html_escape(self.config.voice.provider)}</code>\n"
+            f"Transcription model: <code>{html_escape(self.config.voice.transcription_model)}</code>\n"
+            f"TTS: <code>{html_escape(self.config.voice.tts_model)} / {html_escape(self.config.voice.tts_voice)}</code>\n\n"
+            "Use <code>/voice on</code>, <code>/voice off</code>, or <code>/voice test</code>."
+        )
+        await update.effective_message.reply_text(status, parse_mode=PARSE_MODE)
+
     # ----- text + files
 
     async def on_text(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -806,11 +927,14 @@ class BotApp:
         if not text.strip():
             return
         chat = update.effective_chat
+        sess_pre = self.sessions.get_or_create(chat.id)
         try:
             sess = await self._ensure_session(chat.id)
-        except Exception as exc:  # noqa: BLE001 - keep Telegram UX actionable
+        except Exception as exc:
+            stderr_tail = sess_pre.extra_state.pop("last_acp_stderr", "")
+            detail = self._format_cursor_session_error(exc, stderr_tail=stderr_tail)
             await update.effective_message.reply_text(
-                f"Could not start Cursor session: {html_escape(str(exc) or type(exc).__name__)}",
+                f"Could not start Cursor session:\n{detail}",
                 parse_mode=PARSE_MODE,
             )
             return
@@ -839,6 +963,55 @@ class BotApp:
             f"Saved to <code>{html_escape(str(target.relative_to(sess.workspace)))}</code>",
             parse_mode=PARSE_MODE,
         )
+
+    async def on_voice(self, update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        if not await self._guard(update):
+            return
+        msg = update.effective_message
+        chat = update.effective_chat
+        sess = self.sessions.get_or_create(chat.id)
+        if not self.config.voice.enabled:
+            await msg.reply_text("Voice input is disabled in config. Use text or enable [voice].")
+            return
+        if not self.voice.available:
+            await msg.reply_text("Voice input needs OPENAI_API_KEY in /etc/cursor2telegram/env.")
+            return
+
+        voice_dir = sess.workspace / "_voice"
+        voice_dir.mkdir(parents=True, exist_ok=True)
+        if msg.voice:
+            tg_file = await msg.voice.get_file()
+            target = voice_dir / f"voice-{msg.voice.file_unique_id}.ogg"
+        elif msg.audio:
+            tg_file = await msg.audio.get_file()
+            name = msg.audio.file_name or f"audio-{msg.audio.file_unique_id}.ogg"
+            target = voice_dir / name
+        else:
+            return
+
+        await chat.send_action(ChatAction.TYPING)
+        await tg_file.download_to_drive(custom_path=str(target))
+        try:
+            transcript = await self.voice.transcribe(target)
+        except VoiceError as exc:
+            await msg.reply_text(f"Could not transcribe voice: {html_escape(str(exc))}", parse_mode=PARSE_MODE)
+            return
+
+        await msg.reply_text(
+            f"<b>Heard</b>\n{html_escape(transcript[:3000])}",
+            parse_mode=PARSE_MODE,
+        )
+        try:
+            prompt_session = await self._ensure_session(chat.id)
+        except Exception as exc:
+            stderr_tail = sess.extra_state.pop("last_acp_stderr", "")
+            detail = self._format_cursor_session_error(exc, stderr_tail=stderr_tail)
+            await msg.reply_text(
+                f"Could not start Cursor session:\n{detail}",
+                parse_mode=PARSE_MODE,
+            )
+            return
+        await self._dispatch_prompt(update, prompt_session, f"Voice message transcript:\n{transcript}")
 
     # ----- callbacks
 
@@ -888,6 +1061,14 @@ class BotApp:
         if head == "yolo" and len(parts) == 2 and parts[1] == "toggle":
             sess.yolo = not sess.yolo
             await query.message.reply_text(f"YOLO = <b>{'on' if sess.yolo else 'off'}</b>", parse_mode=PARSE_MODE)
+            return
+
+        if head == "voice" and len(parts) == 2 and parts[1] == "toggle":
+            enabled = not self._voice_summary_enabled(sess)
+            sess.extra_state["voice_summary_enabled"] = enabled
+            await query.message.reply_text(
+                f"Voice summaries = <b>{'on' if enabled else 'off'}</b>", parse_mode=PARSE_MODE
+            )
             return
 
         if head == "sandbox" and len(parts) == 2:
@@ -953,6 +1134,7 @@ class BotApp:
             "files": self.cmd_files,
             "mcp": self.cmd_mcp,
             "help": self.cmd_help,
+            "voice": self.cmd_voice,
         }
 
     # ----- prompt dispatch
@@ -1014,6 +1196,7 @@ class BotApp:
         buf = TextBuffer(throttle_s=self.config.ux.stream_throttle_ms / 1000.0)
         current_msg_id: int | None = None
         current_msg_text: str = ""
+        assistant_text_parts: list[str] = []
         draft_id = random.randint(1, 2_147_483_647)
         draft_enabled = self.config.ux.use_message_drafts and chat.type == "private"
         draft_failed = False
@@ -1081,6 +1264,7 @@ class BotApp:
         async for ev in agg.events():
             if ev.kind == "text_chunk":
                 buf.append(ev.text)
+                assistant_text_parts.append(ev.text)
                 now = time.monotonic()
                 if buf.should_flush() or (now - last_periodic) >= 1.5:
                     await flush_text()
@@ -1123,6 +1307,9 @@ class BotApp:
             elif ev.kind == "raw":
                 log.debug("stream.raw", kind=ev.data.get("kind"))
         await end_text_block()
+        final_text = "".join(assistant_text_parts).strip()
+        if final_text:
+            await self._send_voice_summary(chat, sess, final_text, context="agent response")
 
     @staticmethod
     def _todo_marker(status: str | None) -> str:
@@ -1193,6 +1380,55 @@ class BotApp:
             seen.add(str(path))
             out.append(path)
         return out
+
+    def _voice_summary_enabled(self, sess: ChatSession) -> bool:
+        value = sess.extra_state.get("voice_summary_enabled")
+        if isinstance(value, bool):
+            return value
+        return self.config.voice.enabled and self.config.voice.summary_enabled
+
+    async def _send_voice_summary(
+        self,
+        chat,
+        sess: ChatSession,
+        text: str,
+        *,
+        context: str = "",
+        force: bool = False,
+    ) -> None:
+        if not force and not self._voice_summary_enabled(sess):
+            return
+        if not text.strip():
+            return
+        if not self.voice.available:
+            if force:
+                await chat.send_message("Voice needs OPENAI_API_KEY in /etc/cursor2telegram/env.")
+            else:
+                log.info("voice.summary.skipped_unavailable")
+            return
+        voice_dir = sess.workspace / "_voice"
+        try:
+            summary = await self.voice.summarize(text, context=context)
+            speech = await self.voice.synthesize(
+                summary,
+                voice_dir,
+                stem=f"summary-{int(time.time())}-{random.randint(1000, 9999)}",
+            )
+            await self._send_speech_file(chat, speech)
+        except VoiceUnavailable as exc:
+            if force:
+                await chat.send_message(str(exc))
+            else:
+                log.info("voice.summary.unavailable", error=str(exc))
+        except VoiceError as exc:
+            await chat.send_message(f"Voice summary failed: {html_escape(str(exc))}", parse_mode=PARSE_MODE)
+
+    async def _send_speech_file(self, chat, speech: SpeechFile) -> None:
+        with speech.path.open("rb") as f:
+            if speech.format in {"opus", "ogg"}:
+                await chat.send_voice(voice=f, caption=speech.text[:1024], filename=speech.path.name)
+            else:
+                await chat.send_audio(audio=f, caption=speech.text[:1024], filename=speech.path.name)
 
     async def _send_message_draft(self, *, chat_id: int, draft_id: int, text: str) -> bool:
         """Use Telegram Bot API 9.5 native draft streaming when available.

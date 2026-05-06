@@ -17,6 +17,11 @@ default_model = "auto"
 [ux]
 stream_throttle_ms = 250
 use_message_drafts = false
+
+[voice]
+enabled = true
+summary_enabled = false
+tts_voice = "nova"
 """.strip()
     )
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "tok-from-env")
@@ -27,6 +32,9 @@ use_message_drafts = false
     assert cfg.cursor.default_model == "auto"
     assert cfg.ux.stream_throttle_ms == 250
     assert not cfg.ux.use_message_drafts
+    assert cfg.voice.enabled
+    assert not cfg.voice.summary_enabled
+    assert cfg.voice.tts_voice == "nova"
     assert cfg.is_allowed(42, None)
     assert not cfg.is_allowed(99, None)
 
@@ -36,6 +44,8 @@ def test_load_config_no_files(monkeypatch):
     cfg = load_config(Path("/nonexistent/path.toml"))
     assert cfg.telegram.bot_token == ""
     assert cfg.telegram.allowed_user_ids == ()
+    assert cfg.voice.provider == "openai"
+    assert cfg.voice.summary_enabled
     assert not cfg.is_allowed(1, 1)
 
 
