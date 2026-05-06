@@ -327,10 +327,9 @@ async def session_new(
     cwd: str,
     mcp_servers: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    params: dict[str, Any] = {"cwd": cwd}
-    if mcp_servers is not None:
-        params["mcpServers"] = mcp_servers
-    return await client.request("session/new", params)
+    # Cursor validates session/new with zod: mcpServers must be an array (empty [] is OK; omitting can fail).
+    servers = list(mcp_servers) if mcp_servers is not None else []
+    return await client.request("session/new", {"cwd": cwd, "mcpServers": servers})
 
 
 async def session_load(client: AcpClient, *, session_id: str, cwd: str) -> dict[str, Any]:

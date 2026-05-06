@@ -127,7 +127,7 @@ async def test_session_new_omits_mcp_servers_when_none(tmp_path):
     cwd = str(tmp_path / "workspace")
 
     await session_new(client, cwd=cwd)
-    client.request.assert_awaited_once_with("session/new", {"cwd": cwd})
+    client.request.assert_awaited_once_with("session/new", {"cwd": cwd, "mcpServers": []})
 
     client.request.reset_mock()
     await session_new(client, cwd=cwd, mcp_servers=[])
