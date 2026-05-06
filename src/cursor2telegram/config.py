@@ -41,6 +41,11 @@ DEFAULT_AGENT_BIN_CANDIDATES: tuple[str, ...] = (
     "agent",
 )
 
+DEFAULT_VOICE_SUMMARY_PROMPT = (
+    "Summarize this Cursor/terminal result for a Telegram voice note in one short, useful sentence. "
+    "Mention success/failure and the main outcome. Do not include secrets, tokens, or long paths."
+)
+
 
 @dataclass(frozen=True, slots=True)
 class TelegramConfig:
@@ -94,6 +99,21 @@ class UxConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class VoiceConfig:
+    enabled: bool = True
+    provider: str = "openai"
+    api_key: str = ""
+    transcription_model: str = "whisper-1"
+    summary_model: str = "gpt-4o-mini"
+    tts_model: str = "tts-1"
+    tts_voice: str = "alloy"
+    tts_format: str = "opus"
+    summary_enabled: bool = True
+    summary_max_chars: int = 700
+    summary_prompt: str = DEFAULT_VOICE_SUMMARY_PROMPT
+
+
+@dataclass(frozen=True, slots=True)
 class StorageConfig:
     state_dir: Path = Path("/var/lib/cursor2telegram")
     log_dir: Path = Path("/var/log/cursor2telegram")
@@ -106,6 +126,7 @@ class Config:
     cursor: CursorConfig = field(default_factory=CursorConfig)
     policy: PolicyConfig = field(default_factory=PolicyConfig)
     ux: UxConfig = field(default_factory=UxConfig)
+    voice: VoiceConfig = field(default_factory=VoiceConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
     config_path: Path | None = None
     raw: dict[str, Any] = field(default_factory=dict)
@@ -190,6 +211,7 @@ def load_config(path: str | Path | None = None) -> Config:
     cu = raw.get("cursor", {}) or {}
     po = raw.get("policy", {}) or {}
     ux = raw.get("ux", {}) or {}
+    vo = raw.get("voice", {}) or {}
     st = raw.get("storage", {}) or {}
 
     bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "") or tg.get("bot_token", "")
@@ -245,6 +267,25 @@ def load_config(path: str | Path | None = None) -> Config:
         notify_on_completion=bool(ux.get("notify_on_completion", False)),
     )
 
+    voice = VoiceConfig(
+        enabled=bool(vo.get("enabled", True)),
+        provider=str(vo.get("provider", "openai")),
+        api_key=os.environ.get("OPENAI_API_KEY", "") or str(vo.get("api_key", "")),
+        transcription_model=str(vo.get("transcription_model", "whisper-1")),
+        summary_model=str(vo.get("summary_model", "gpt-4o-mini")),
+        tts_model=str(vo.get("tts_model", "tts-1")),
+        tts_voice=str(vo.get("tts_voice", "alloy")),
+        tts_format=str(vo.get("tts_format", "opus")),
+        summary_enabled=bool(vo.get("summary_enabled", True)),
+        summary_max_chars=int(vo.get("summary_max_chars", 700)),
+        summary_prompt=str(
+            vo.get(
+                "summary_prompt",
+                DEFAULT_VOICE_SUMMARY_PROMPT,
+            )
+        ),
+    )
+
     storage = StorageConfig(
         state_dir=Path(st.get("state_dir", "/var/lib/cursor2telegram")),
         log_dir=Path(st.get("log_dir", "/var/log/cursor2telegram")),
@@ -256,6 +297,7 @@ def load_config(path: str | Path | None = None) -> Config:
         cursor=cursor,
         policy=policy,
         ux=ux_cfg,
+        voice=voice,
         storage=storage,
         config_path=chosen_path,
         raw=raw,

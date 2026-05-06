@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import sys
-from pathlib import Path
 from textwrap import dedent
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -119,6 +118,22 @@ async def test_error_response_raises(mock_acp_server):
     async with client:
         with pytest.raises(AcpError):
             await client.request("session/throw", {})
+
+
+@pytest.mark.asyncio
+async def test_session_new_omits_mcp_servers_when_none(tmp_path):
+    client = MagicMock()
+    client.request = AsyncMock(return_value={"sessionId": "sid-1"})
+    cwd = str(tmp_path / "workspace")
+
+    await session_new(client, cwd=cwd)
+    client.request.assert_awaited_once_with("session/new", {"cwd": cwd})
+
+    client.request.reset_mock()
+    await session_new(client, cwd=cwd, mcp_servers=[])
+    client.request.assert_awaited_once_with(
+        "session/new", {"cwd": cwd, "mcpServers": []}
+    )
 
 
 @pytest.mark.asyncio

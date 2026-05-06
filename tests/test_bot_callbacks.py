@@ -25,6 +25,29 @@ def test_all_main_menu_buttons_have_callback_handlers(tmp_path):
     assert "workspace" in handlers
 
 
+def test_workspace_from_new_command_args(tmp_path):
+    target = tmp_path / "studyshorts"
+    parsed = BotApp._workspace_from_args([str(target)])
+    assert parsed == target.resolve(strict=False)
+    assert BotApp._workspace_from_args([]) is None
+    assert BotApp._workspace_from_args(None) is None
+
+
+def test_voice_summary_enabled_uses_session_override(tmp_path):
+    cfg = Config(
+        telegram=TelegramConfig(allowed_user_ids=(1,)),
+        cursor=CursorConfig(workspace=str(tmp_path / "workspace")),
+    )
+    app = BotApp(cfg)
+    sess = app.sessions.get_or_create(1)
+
+    assert app._voice_summary_enabled(sess)
+    sess.extra_state["voice_summary_enabled"] = False
+    assert not app._voice_summary_enabled(sess)
+    sess.extra_state["voice_summary_enabled"] = True
+    assert app._voice_summary_enabled(sess)
+
+
 def test_model_tokens_are_short_enough_for_telegram(tmp_path):
     cfg = Config(
         telegram=TelegramConfig(allowed_user_ids=(1,)),

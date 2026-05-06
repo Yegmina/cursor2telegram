@@ -14,8 +14,8 @@ Environment=PATH=/home/@USER@/.local/bin:/usr/local/bin:/usr/bin:/bin
 Environment=HOME=/home/@USER@
 Environment=PYTHONUNBUFFERED=1
 ExecStart=@VENV@/bin/cursor2telegram --config /etc/cursor2telegram/config.toml
-Restart=on-failure
-RestartSec=3
+Restart=always
+RestartSec=5
 LimitNOFILE=65536
 
 # Hardening (we still need broad fs/exec since the agent does real work).

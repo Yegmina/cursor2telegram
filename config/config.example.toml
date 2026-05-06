@@ -40,7 +40,8 @@ extra_args = []
 # Mirror that for ACP sessions: when true, default permission decisions become "allow-once".
 force_writes = true
 
-# Auto-approve MCP servers in this session (--approve-mcps).
+# Auto-approve MCP servers in this session (--approve-mcps). If session/new returns
+# JSON-RPC -32603 (internal error), try approve_mcps = false or fix ~/.cursor/mcp.json.
 approve_mcps = false
 
 # Sandbox: "" | "enabled" | "disabled"
@@ -87,6 +88,20 @@ show_tool_call_args = true
 show_token_usage = true
 # Avoid noisy "done — end_turn" messages after every response.
 notify_on_completion = false
+
+[voice]
+# OpenAI-powered voice input and short spoken summaries.
+# Set OPENAI_API_KEY in /etc/cursor2telegram/env; do not put secrets here.
+enabled = true
+provider = "openai"
+transcription_model = "whisper-1"
+summary_model = "gpt-4o-mini"
+tts_model = "tts-1"
+tts_voice = "alloy"
+tts_format = "opus"
+summary_enabled = true
+summary_max_chars = 700
+summary_prompt = "Summarize this Cursor/terminal result for a Telegram voice note in one short, useful sentence. Mention success/failure and the main outcome. Do not include secrets, tokens, or long paths."
 
 [storage]
 state_dir = "/var/lib/cursor2telegram"
