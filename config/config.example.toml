@@ -41,9 +41,9 @@ extra_args = []
 # Mirror that for ACP sessions: when true, default permission decisions become "allow-once".
 force_writes = true
 
-# Auto-approve MCP servers in this session (--approve-mcps). If session/new returns
-# JSON-RPC -32603 (internal error), try approve_mcps = false or fix ~/.cursor/mcp.json.
-approve_mcps = false
+# Auto-approve MCP servers (--approve-mcps) and pass them from ~/.cursor/mcp.json into session/new.
+# If a specific MCP crashes startup, set approve_mcps = false or fix mcp.json.
+approve_mcps = true
 
 # Sandbox: "" | "enabled" | "disabled"
 sandbox = ""

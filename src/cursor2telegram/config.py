@@ -70,7 +70,7 @@ class CursorConfig:
     workspace: str = ""
     extra_args: tuple[str, ...] = ()
     force_writes: bool = True
-    approve_mcps: bool = False
+    approve_mcps: bool = True
     sandbox: str = ""  # empty -> default; or "enabled"/"disabled"
     trust: bool = True
     use_worktree: bool = False
@@ -149,6 +149,19 @@ class Config:
         if user_id is not None and user_id in allowed_users:
             return True
         return chat_id is not None and chat_id in allowed_chats
+
+
+def _env_override_bool(name: str) -> bool | None:
+    """Parse optional env bool: unset -> None; 1/true/yes/on vs 0/false/no/off."""
+
+    raw = os.environ.get(name, "").strip().lower()
+    if not raw:
+        return None
+    if raw in ("1", "true", "yes", "on"):
+        return True
+    if raw in ("0", "false", "no", "off"):
+        return False
+    return None
 
 
 def _coerce_int_tuple(value: Any) -> tuple[int, ...]:
@@ -241,6 +254,12 @@ def load_config(path: str | Path | None = None) -> Config:
     else:
         acp_ready_delay_s = float(cu.get("acp_ready_delay_s", 2.0))
 
+    _approve_env = _env_override_bool("CURSOR2TELEGRAM_APPROVE_MCPS")
+    if _approve_env is not None:
+        approve_mcps = _approve_env
+    else:
+        approve_mcps = bool(cu.get("approve_mcps", True))
+
     cursor = CursorConfig(
         agent_binary=agent_bin,
         api_key=api_key,
@@ -252,7 +271,7 @@ def load_config(path: str | Path | None = None) -> Config:
         workspace=str(cu.get("workspace", "")),
         extra_args=_coerce_str_tuple(cu.get("extra_args")),
         force_writes=bool(cu.get("force_writes", True)),
-        approve_mcps=bool(cu.get("approve_mcps", False)),
+        approve_mcps=approve_mcps,
         sandbox=str(cu.get("sandbox", "")),
         trust=bool(cu.get("trust", True)),
         use_worktree=bool(cu.get("use_worktree", False)),
