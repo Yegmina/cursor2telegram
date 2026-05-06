@@ -227,12 +227,12 @@ class BotApp:
         ``agent --model``. Passing the rich id makes the ACP process exit.
         """
 
-        model_id = (model_id or "").strip()
-        if not model_id or model_id in {"auto", "default", "default[]"}:
+        mid = (model_id or "").strip()
+        if not mid or mid in {"auto", "default", "default[]"}:
             return ""
-        if "[" in model_id:
+        if "[" in mid:
             return ""
-        return model_id
+        return mid
 
     @staticmethod
     def _workspace_from_args(args: list[str] | tuple[str, ...] | None) -> Path | None:
@@ -279,6 +279,8 @@ class BotApp:
                     "/var/lib/cursor2telegram/workspaces/default (see [cursor] workspace).\n"
                     "• Set CURSOR_API_KEY in /etc/cursor2telegram/env for stable auth.\n"
                     "• In config.toml set approve_mcps = false if MCP startup fails.\n"
+                    "• The bot waits a few seconds after connect before session/new; if errors persist, "
+                    "raise acp_ready_delay_s in [cursor] (e.g. 3) or check agent version.\n"
                     "• Server: agent status | journalctl -u cursor2telegram -n 80"
                 )
                 + "</pre>"
@@ -338,8 +340,12 @@ class BotApp:
                 )
             except (AcpError, TimeoutError):
                 pass
+            ready = max(0.0, self.config.cursor.acp_ready_delay_s)
+            if ready:
+                log.info("acp.post_initialize_delay", seconds=ready)
+                await asyncio.sleep(ready)
             res: dict[str, Any] | None = None
-            for attempt in range(2):
+            for attempt in range(3):
                 try:
                     res = await asyncio.wait_for(
                         acp_session_new(
@@ -349,9 +355,15 @@ class BotApp:
                     )
                     break
                 except AcpError as e:
-                    if e.code == -32603 and attempt == 0:
-                        log.warning("session.new.retry_after_internal", error=str(e))
-                        await asyncio.sleep(1.5)
+                    if e.code == -32603 and attempt < 2:
+                        pause = 2.0 if attempt == 0 else 3.0
+                        log.warning(
+                            "session.new.retry_after_internal",
+                            attempt=attempt,
+                            pause_s=pause,
+                            error=str(e),
+                        )
+                        await asyncio.sleep(pause)
                         continue
                     raise
             if res is None:  # pragma: no cover - loop always sets or raises

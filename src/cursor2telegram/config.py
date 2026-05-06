@@ -74,6 +74,8 @@ class CursorConfig:
     sandbox: str = ""  # empty -> default; or "enabled"/"disabled"
     trust: bool = True
     use_worktree: bool = False
+    # Wait after initialize before session/new (Cursor agent warm-up; mitigates -32603 races).
+    acp_ready_delay_s: float = 2.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -230,6 +232,15 @@ def load_config(path: str | Path | None = None) -> Config:
         request_timeout_s=float(tg.get("request_timeout_s", 30.0)),
     )
 
+    _delay_raw = os.environ.get("CURSOR2TELEGRAM_ACP_READY_DELAY_S", "").strip()
+    if _delay_raw:
+        try:
+            acp_ready_delay_s = float(_delay_raw)
+        except ValueError:
+            acp_ready_delay_s = float(cu.get("acp_ready_delay_s", 2.0))
+    else:
+        acp_ready_delay_s = float(cu.get("acp_ready_delay_s", 2.0))
+
     cursor = CursorConfig(
         agent_binary=agent_bin,
         api_key=api_key,
@@ -245,6 +256,7 @@ def load_config(path: str | Path | None = None) -> Config:
         sandbox=str(cu.get("sandbox", "")),
         trust=bool(cu.get("trust", True)),
         use_worktree=bool(cu.get("use_worktree", False)),
+        acp_ready_delay_s=acp_ready_delay_s,
     )
 
     policy = PolicyConfig(

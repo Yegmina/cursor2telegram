@@ -35,6 +35,7 @@ tts_voice = "nova"
     assert cfg.voice.enabled
     assert not cfg.voice.summary_enabled
     assert cfg.voice.tts_voice == "nova"
+    assert cfg.cursor.acp_ready_delay_s == 2.0
     assert cfg.is_allowed(42, None)
     assert not cfg.is_allowed(99, None)
 
@@ -47,6 +48,26 @@ def test_load_config_no_files(monkeypatch):
     assert cfg.voice.provider == "openai"
     assert cfg.voice.summary_enabled
     assert not cfg.is_allowed(1, 1)
+
+
+def test_acp_ready_delay_from_toml_and_env(tmp_path, monkeypatch):
+    cfg_path = tmp_path / "c.toml"
+    cfg_path.write_text(
+        """
+[telegram]
+allowed_user_ids = [1]
+
+[cursor]
+acp_ready_delay_s = 3.5
+""".strip()
+    )
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "x")
+    cfg = load_config(cfg_path)
+    assert cfg.cursor.acp_ready_delay_s == 3.5
+
+    monkeypatch.setenv("CURSOR2TELEGRAM_ACP_READY_DELAY_S", "0.5")
+    cfg2 = load_config(cfg_path)
+    assert cfg2.cursor.acp_ready_delay_s == 0.5
 
 
 def test_resolved_agent_binary_explicit(monkeypatch, tmp_path):

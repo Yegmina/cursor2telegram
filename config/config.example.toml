@@ -54,6 +54,9 @@ trust = true
 # Run inside a fresh git worktree under ~/.cursor/worktrees per session.
 use_worktree = false
 
+# Seconds to wait after ACP initialize before session/new (avoids Cursor -32603 warm-up race). 0 = skip.
+acp_ready_delay_s = 2.0
+
 [policy]
 # Default response to ACP `session/request_permission` when no explicit user prompt is needed:
 #   prompt        -> always ask in Telegram (recommended)
