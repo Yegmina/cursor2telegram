@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { file = "LICENSE" }
 authors = [
-  { name = "Yehor Tereshchenko", email = "yehort@users.noreply.github.com" },
+  { name = "Yegmina", email = "Yegmina@users.noreply.github.com" },
 ]
 keywords = ["cursor", "telegram", "agent", "acp", "automation"]
 classifiers = [
